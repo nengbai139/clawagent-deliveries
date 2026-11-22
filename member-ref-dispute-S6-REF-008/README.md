@@ -206,5 +206,6 @@ tests/
   test_acceptance_criteria.py  ★ 逐条对应验收标准
   test_api.py                   接口测试
   test_reminder.py              超时提醒
+  test_tasks_cli.py             ★ 后台任务 CLI（含入口回归测试）
 alembic/       迁移
 ```

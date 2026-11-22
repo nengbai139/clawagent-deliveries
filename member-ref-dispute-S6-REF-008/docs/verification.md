@@ -26,7 +26,7 @@ platform darwin -- Python 3.13.17, pytest-9.2.0, pluggy-1.7.0
 rootdir: /Users/baineng/Documents/devops/qdtech/member-ref-dispute
 configfile: pyproject.toml
 plugins: anyio-4.16.0, asyncio-1.5.0
-collected 25 items
+collected 28 items
 
 tests/test_acceptance_criteria.py::test_criterion1_single_role_approval_does_not_take_effect PASSED [  4%]
 tests/test_acceptance_criteria.py::test_criterion1_two_different_people_two_roles_takes_effect PASSED [  8%]
@@ -53,7 +53,7 @@ tests/test_reminder.py::test_recent_dispute_not_reminded PASSED          [ 88%]
 tests/test_reminder.py::test_reminder_is_idempotent PASSED               [ 92%]
 tests/test_reminder.py::test_reminder_writes_audit PASSED                [ 96%]
 tests/test_reminder.py::test_decided_dispute_not_reminded PASSED         [100%]
-======================== 25 passed, 1 warning in 0.93s =========================
+======================== 28 passed, 1 warning in 0.97s =========================
 ```
 
 ## 2. 逐条对照验收标准
@@ -264,10 +264,32 @@ manager（`5f22c15f`）——两条都**没有**改变状态（`before=after=pen
 ```
 $ .venv/bin/python -m app.tasks remind-disputes --days 10
 reminded=1
+$ .venv/bin/python -m app.tasks remind-disputes --days 10     # 幂等
+reminded=0
 ```
 
-（覆盖：>10 天才提醒、<10 天不提醒、**幂等**（第二次 `reminded=0`）、
-已处理的争议不提醒、提醒写审计。）
+⚠️⚠️ **这里踩到一个真 bug**：`session_scope()` 原本是**裸生成器**，
+而 `with session_scope()` 要求**上下文管理器** ⇒
+`TypeError: 'generator' object does not support the context manager protocol`
+⇒ **CLI 入口完全不可用**。
+
+⚠️ 而**服务层测试全绿**（它们不用这个上下文管理器）⇒ **没人发现**。
+
+⇒ 修法：`@contextmanager` 装饰器。
+⇒ 并补 `tests/test_tasks_cli.py` **回归测试**（覆盖：上下文管理器可用、
+异常时回滚、CLI 幂等）—— **凡是「有入口」的东西，入口本身也要测**。
+
+变异验证（把 `session_scope` 退回裸生成器）：
+
+```
+FAILED tests/test_tasks_cli.py::test_session_scope_is_a_context_manager - Typ...
+FAILED tests/test_tasks_cli.py::test_session_scope_rolls_back_on_error - Type...
+FAILED tests/test_tasks_cli.py::test_remind_disputes_cli_runs_and_is_idempotent
+3 failed, 25 passed, 1 warning in 1.02s
+```
+
+覆盖的业务规则：>10 天才提醒、<10 天不提醒、**幂等**（第二次 `reminded=0`）、
+已处理的争议不提醒、提醒写审计。
 
 ## 7. 静态检查
 
