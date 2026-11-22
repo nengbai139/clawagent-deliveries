@@ -1,0 +1,32 @@
+# 验收环境：PostgreSQL 16（与客户统一技术约定同大版本）
+#
+# 用法：
+#   docker compose up -d
+#   export APP_DATABASE_URL="postgresql+psycopg://app:app@127.0.0.1:55432/app"
+#   export TEST_DATABASE_URL="$APP_DATABASE_URL"
+#   .venv/bin/python -m alembic upgrade head
+#   .venv/bin/python -m pytest tests/ -v
+#
+# ⚠️ 只起**数据库**：应用与测试在宿主机的虚拟环境里跑（更方便看真实输出）。
+# ⚠️ 端口用 55432 而不是 5432 ⇒ 不会和本机已有的 PostgreSQL 撞端口。
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: refdispute-pg
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d app"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+    volumes:
+      - refdispute_pgdata:/var/lib/postgresql/data
+
+volumes:
+  refdispute_pgdata:

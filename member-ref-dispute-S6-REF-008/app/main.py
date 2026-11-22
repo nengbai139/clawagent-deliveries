@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.api.routes import router
 from app.core.config import get_settings
+from app.web.report_page import router as report_page_router
 
 
 def create_app() -> FastAPI:
@@ -18,6 +19,8 @@ def create_app() -> FastAPI:
         ),
     )
     app.include_router(router)
+    # ⚠️ 报备方页面（工单原文：「接口文档与报备方页面都写明这一点」）。
+    app.include_router(report_page_router)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

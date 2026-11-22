@@ -99,7 +99,24 @@ def submit_dispute(
     attachments: list[Attachment],
     now: datetime | None = None,
 ) -> RefDispute:
-    """提交一条争议。"""
+    """提交一条争议。
+
+    ⚠️⚠️ **只允许对「被拒绝的报备」提争议，且只允许报备方本人提**
+    （工单原文：「**报备方对拒绝结果有异议时**」）：
+    * 报备状态必须是 `rejected_invalid` ⇒ 对 `accepted`/`verified` 的报备
+      提争议**没有依据**（那是正常受理的）；
+    * 提交人必须是**该报备的报备方** ⇒ 否则**任何人都能替别人提争议**。
+    """
+    if report.status != "rejected_invalid":
+        raise DisputeError(
+            "report_not_rejected",
+            f"只有被驳回（rejected_invalid）的报备可以提争议，当前状态是 {report.status}",
+        )
+    if disputer_id != report.reporter_id:
+        raise DisputeError(
+            "not_the_reporter", "只有该报备的报备方可以对它提出争议"
+        )
+
     # ---- 理由白名单（失败关闭）----
     if reason_code in REJECTED_REASON_HINTS:
         raise DisputeError(
@@ -185,9 +202,18 @@ def decide_dispute(
 
     ⚠️ **`uphold`（维持）一次即生效**；**`overturn`（改判）需双人审批**
     ——两个不同的人、各以一个角色，**各审批一次**。
+
+    ⚠️⚠️ **入口统一状态闸门**（两条路径共用）：
+    已生效的改判（`overturned`）**不能**再被 `uphold` 静默回退 ⇒ 否则
+    审计日志里出现「overturn 之后又 uphold」的倒流，而**归属不会回滚**
+    ⇒ 审计与实际归属对不上 ⇒ 数据自相矛盾。
     """
     if not reason or not reason.strip():
         raise DisputeError("reason_required", "处理必须填写理由")
+    if dispute.status != "pending":
+        raise DisputeError(
+            "dispute_not_pending", f"争议状态为 {dispute.status}，不可再处理"
+        )
 
     if decision == "uphold":
         # 维持：不需要双人审批。
@@ -287,13 +313,39 @@ def decide_dispute(
     report = session.get(RefReport, dispute.report_id)
     attribution_detail: dict = {}
     if report is not None:
+        # ⚠️⚠️ **先记下旧归属人**：重算会**就地覆盖** `owner_staff_id`
+        # ⇒ 之后再取就只剩新归属人了 ⇒ **失去归属的那一方（旧归属人）
+        # 既收不到通知、也不在审计里** ⇒ 而它恰恰是最典型的「受影响各方」。
+        previous_owner = report.owner_staff_id
+        report_status_before = report.status
+        reject_reason_before = report.reject_reason
+
+        # ⚠️⚠️ **改判 = 认定系统判错了 ⇒ 被驳回的状态要恢复**
+        # （否则这条报备仍带着 `rejected_invalid` 与驳回原因，下游按 status
+        #   取数时**仍把它当成被否决的报备** ⇒ 改判只改了归属、没改结论。）
+        report.status = "accepted"
+        report.reject_reason = None
+
         result = recompute_attribution(session, report)
+        new_owner = report.owner_staff_id
         attribution_detail = {
             "report_id": str(report.id),
+            "channel_id": str(report.channel_id),
+            "customer_id": str(report.customer_id),
             "reported_at": report.reported_at.isoformat(),
-            "owner_staff_id": result.owner_staff_id,
+            # ⚠️ **旧归属人**也要进审计 ⇒ 否则「谁失去了归属」查不到。
+            "previous_owner_staff_id": str(previous_owner) if previous_owner else None,
+            "owner_staff_id": str(new_owner) if new_owner else None,
             "basis": result.basis,
             "candidates_considered": result.candidates_considered,
+            # ⚠️ 判定要能**复现**：获胜的是哪条报备、候选集是哪些。
+            "winning_report_id": result.winning_report_id,
+            "winning_report_reported_at": result.winning_report_reported_at,
+            "candidate_ids": list(result.candidate_ids),
+            "strategy": result.strategy,
+            "report_status_before": report_status_before,
+            "report_status_after": report.status,
+            "reject_reason_before": reject_reason_before,
         }
         write_audit(
             session,
@@ -303,7 +355,7 @@ def decide_dispute(
             target_type="report",
             target_id=report.id,
             action="attribution.recompute",
-            before_status=report.status,
+            before_status=report_status_before,
             after_status=report.status,
             reason=reason.strip(),
             detail=attribution_detail,
@@ -319,15 +371,34 @@ def decide_dispute(
                 **attribution_detail,
             },
         )
-        if report.owner_staff_id:
+        # ⚠️ **新归属人**（获得归属）。
+        if new_owner:
             _notify(
                 session,
-                str(report.owner_staff_id),
-                "attribution.changed",
+                str(new_owner),
+                "attribution.gained",
                 {
                     "dispute_id": str(dispute.id),
                     "report_id": str(report.id),
-                    "owner_staff_id": result.owner_staff_id,
+                    "owner_staff_id": str(new_owner),
+                    "previous_owner_staff_id": (
+                        str(previous_owner) if previous_owner else None
+                    ),
+                },
+            )
+        # ⚠️ **旧归属人**（失去归属）—— 工单明写「通知受影响各方」，
+        #    而**归属被夺走的一方**是最典型的受影响方 ⇒ 必须通知。
+        #    ⚠️ 新旧同一人时**不重复通知**。
+        if previous_owner and previous_owner != new_owner:
+            _notify(
+                session,
+                str(previous_owner),
+                "attribution.lost",
+                {
+                    "dispute_id": str(dispute.id),
+                    "report_id": str(report.id),
+                    "previous_owner_staff_id": str(previous_owner),
+                    "owner_staff_id": str(new_owner) if new_owner else None,
                 },
             )
 

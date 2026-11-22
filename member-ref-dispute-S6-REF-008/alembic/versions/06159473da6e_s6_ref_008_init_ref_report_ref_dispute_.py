@@ -117,7 +117,18 @@ def upgrade() -> None:
     sa.Column('deleted_at', sa.DateTime(timezone=True), nullable=True),
     sa.ForeignKeyConstraint(['dispute_id'], ['ref_dispute.id'], ),
     sa.PrimaryKeyConstraint('id'),
-    sa.UniqueConstraint('dispute_id', 'approver_role', 'approver_id', name='uq_dispute_approval_once_per_role_per_person')
+    # ⚠️⚠️ **唯一约束落在「人」上，不含角色**（与 `app/models/entities.py`
+    # 的 `DisputeApproval.__table_args__` **必须一致**——两边不一致 ⇒
+    # 测试跑的是**模型**的表结构，生产跑的是**迁移**的表结构 ⇒
+    # 「同一人一争议只能批一次」这条验收标准 2 的数据库层兜底在生产上
+    # **根本没生效**（迁移里原来是 (dispute_id, approver_role, approver_id)
+    # ⇒ 同一人**换角色就能写两行** ⇒ 双人审批形同虚设）。
+    #
+    # 为什么不能是三元组：应用层的「先查后写」在并发下是典型
+    # check-then-act 竞态 ⇒ 同一人能写下两行 ⇒ 审计里出现两条同一人
+    # 不同角色的审批，**看起来像双人审批** ⇒ 约束直接落在**人**上，
+    # 并发下也拦得住。
+    sa.UniqueConstraint('dispute_id', 'approver_id', name='uq_dispute_approval_once_per_person')
     )
     op.create_index('ix_dispute_approval_dispute', 'dispute_approval', ['dispute_id'], unique=False)
     # ### end Alembic commands ###

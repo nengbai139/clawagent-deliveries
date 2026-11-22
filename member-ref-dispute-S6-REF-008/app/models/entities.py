@@ -178,13 +178,19 @@ class DisputeApproval(TimestampMixin, Base):
 
     __table_args__ = (
         Index("ix_dispute_approval_dispute", "dispute_id"),
-        # ⚠️ **同一争议 + 同一角色 + 同一人** 只能有一条 ⇒ 重复审批在**数据库层**
-        # 就写不进去（而不是靠应用层先查后写那个有竞态的写法）。
+        # ⚠️⚠️ **唯一约束是「同一人 + 同一争议」一条**（**不含角色**）。
+        #
+        # 为什么不用 (dispute_id, approver_role, approver_id)：那个三元组
+        # **拦不住**「同一人 + 不同角色」⇒ 应用层的「先查后写」在并发下
+        # 是典型 check-then-act 竞态 ⇒ 同一人**能**写下两行 ⇒
+        # 审计里出现两条同一人不同角色的审批，**看起来像双人审批**。
+        #
+        # ⇒ 约束直接落在**人**上 ⇒ 「同一人一争议只能批一次」由**数据库**保证
+        # ⇒ 并发下也拦得住 ⇒ 验收标准 2 不依赖应用层的检查时机。
         UniqueConstraint(
             "dispute_id",
-            "approver_role",
             "approver_id",
-            name="uq_dispute_approval_once_per_role_per_person",
+            name="uq_dispute_approval_once_per_person",
         ),
     )
 

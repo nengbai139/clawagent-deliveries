@@ -21,7 +21,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
 
     # ---- 数据库 ----
-    database_url: str = "postgresql+psycopg://app:app@localhost:5432/app"
+    #: ⚠️⚠️ **没有默认值**——必须显式给 `APP_DATABASE_URL`。
+    #:
+    #: 之前这里默认 `postgresql+psycopg://app:app@localhost:5432/app`
+    #: ⇒ 一旦忘了设环境变量，**后台任务 CLI**（`python -m app.tasks`）
+    #: 就会连到**本机 5432 端口上那个「碰巧在那儿」的库**
+    #: （本机开发机上那个端口可能是**别的项目**的库！）⇒
+    #: 超时提醒任务会往**不相关的数据库**里写通知与审计。
+    #:
+    #: ⇒ 缺配置就**启动时炸**（fail fast），比连错库安全得多。
+    database_url: str
 
     # ---- Redis ----
     redis_url: str = "redis://localhost:6379/0"

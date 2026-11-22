@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import uuid
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
@@ -18,7 +17,9 @@ def _make_pending(session: Session, org_id, age_days: int) -> RefDispute:
     d = dispute_svc.submit_dispute(
         session,
         report,
-        disputer_id=uuid.uuid4(),
+        # ⚠️ 提交人必须是**该报备的报备方**（工单原文：「报备方对拒绝结果
+        # 有异议时」）⇒ 提交人 = `report.reporter_id`。
+        disputer_id=report.reporter_id,
         disputer_type="staff",
         reason_code="wrong_attribution",
         reason_text="归属错了",
@@ -95,7 +96,7 @@ def test_decided_dispute_not_reminded(session: Session, org_id):
     """已处理的争议**不再提醒**（它已经不等「负责人」了）。"""
     report = make_report(session, org_id, status="rejected_invalid")
     d = dispute_svc.submit_dispute(
-        session, report, disputer_id=uuid.uuid4(), disputer_type="staff",
+        session, report, disputer_id=report.reporter_id, disputer_type="staff",
         reason_code="wrong_attribution", reason_text="x", attachments=[],
     )
     d.created_at = datetime.now(UTC) - timedelta(days=30)

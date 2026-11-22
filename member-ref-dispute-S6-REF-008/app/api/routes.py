@@ -33,7 +33,16 @@ router = APIRouter()
 
 # ---------------------------------------------------------------- 复核
 
-@router.get("/api/admin/ref/reports", response_model=list[ReportOut])
+@router.get(
+    "/api/admin/ref/reports",
+    response_model=list[ReportOut],
+    summary="列出报备（待复核）",
+    description=(
+        "按 `status` / `reporter_type` / `owner_staff_id` 过滤。\n\n"
+        "`accepted` 的报备可被标记 `verified` 或以 `rejected_invalid` 驳回"
+        "（**驳回必须填原因**）。"
+    ),
+)
 def list_reports(
     session: Session = SessionDep,
     actor: CurrentActor = ActorDep,
@@ -111,6 +120,26 @@ def reject_report(
     "/api/ref/reports/{report_id}/disputes",
     response_model=DisputeOut,
     status_code=status.HTTP_201_CREATED,
+    summary="提交归属争议",
+    description=(
+        "报备方对拒绝结果有异议时，提交说明与证据附件（**最多 5 个文件**）。\n\n"
+        "## 受理范围（工单明确要求）\n\n"
+        "**只受理「系统判断错误」类原因**：\n\n"
+        "| reason_code | 含义 |\n|---|---|\n"
+        "| `normalization_false_duplicate` | 归一化误判为重复 |\n"
+        "| `existing_customer_data_error` | 存量客户信息有误 |\n"
+        "| `wrong_attribution` | 归属判错 |\n"
+        "| `other_system_error` | 其它系统错误 |\n\n"
+        "**不受理**「更早在线下接触过客户」这类**与首次报备规则冲突**的理由"
+        "（如 `earlier_offline_contact`）——提交会被拒绝（422）。\n\n"
+        "⚠️ 受理范围同时由**数据库 CheckConstraint** 约束，"
+        "换一条 SQL 也写不进非法理由。"
+    ),
+    responses={
+        201: {"description": "争议已创建（status=pending）"},
+        404: {"description": "报备不存在"},
+        422: {"description": "理由不受理 / 说明为空 / 附件超过 5 个"},
+    },
 )
 def submit_dispute(
     report_id: uuid.UUID,
@@ -204,6 +233,28 @@ def _resolve_role(
 @router.post(
     "/api/admin/ref/disputes/{dispute_id}/decide",
     response_model=DecideResultOut,
+    summary="处理争议（维持 / 改判）",
+    description=(
+        "`decision=uphold`（维持）**一次即生效**。\n\n"
+        "`decision=overturn`（改判）需要 `channel_manager` 与 `finance` "
+        "**两个角色由两个不同的人各审批一次**才生效：\n\n"
+        "* 第一次调用返回 `effective=false` 与 `missing_roles`（还缺哪个角色），"
+        "**状态不变**（仍是 `pending`）；\n"
+        "* 第二个**不同的人**审批后 `effective=true`、`status=overturned`；\n"
+        "* ⚠️ **同一个人同时拥有两个角色时，重复审批不计为双人审批**："
+        "第二次审批返回 409 `same_person_already_approved`；\n"
+        "* ⚠️ 同时具备两个角色时**必须**在请求体用 `role` 显式指定"
+        "（否则 422）——否则不知道这次用哪个角色。\n\n"
+        "改判生效后系统**按原报备时间**重新判定归属，结果写入审计日志，"
+        "并通知受影响各方（通知为桩）。"
+    ),
+    responses={
+        200: {"description": "已处理；effective 指示改判是否生效"},
+        403: {"description": "当前用户不具备改判所需角色"},
+        404: {"description": "争议不存在"},
+        409: {"description": "状态不对 / 同一人重复审批"},
+        422: {"description": "角色不明确（多角色时未指定 role）"},
+    },
 )
 def decide_dispute(
     dispute_id: uuid.UUID,

@@ -20,6 +20,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import get_settings
 from app.models.entities import (
     Base,
     RefReport,
@@ -32,6 +33,30 @@ def _database_url() -> str:
     if not url:
         pytest.skip("未设置 TEST_DATABASE_URL（需要 PostgreSQL 16）")
     return url
+
+
+@pytest.fixture(scope="session", autouse=True)
+def app_points_at_test_db():
+    """让**应用自己的**数据库配置也指向**测试库**。
+
+    ⚠️⚠️ **为什么必须这样**：有些代码路径**不走**测试夹具注入的
+    session，而是**自己开引擎**——比如后台任务 CLI 的
+    `app/db/session.py::session_scope()`（它读 `APP_DATABASE_URL`）。
+    ⇒ 若 `APP_DATABASE_URL` 没设，配置里的默认值会指向
+    **`localhost:5432`** —— 那台机器上那个端口**碰巧**跑着**别的库**
+    （本机开发机上就是另一个项目的 Postgres！）⇒
+    **跑测试会往不相关的数据库里写通知与审计**。
+
+    ⇒ 这里把 `APP_DATABASE_URL` 指向**同一个测试库** ⇒
+    CLI 测的确实是「测试库」⇒ 不会碰任何别的库。
+    """
+    url = _database_url()
+    os.environ["APP_DATABASE_URL"] = url
+    # ⚠️ `get_settings()` 是 `lru_cache` 的 ⇒ 改了环境变量要**清缓存**，
+    # 否则第一次调用时缓存的旧值会一直用着。
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture(scope="session")

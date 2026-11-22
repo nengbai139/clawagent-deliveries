@@ -12,7 +12,8 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.entities import AuditLog, DisputeApproval
@@ -23,10 +24,12 @@ from tests.conftest import give_roles, make_report
 
 
 def _submit(session: Session, org_id, report, *, code="wrong_attribution"):
+    # ⚠️ 提交人必须是**该报备的报备方**（工单原文：「报备方对拒绝结果
+    # 有异议时」）⇒ 提交人 = `report.reporter_id`。
     return dispute_svc.submit_dispute(
         session,
         report,
-        disputer_id=uuid.uuid4(),
+        disputer_id=report.reporter_id,
         disputer_type="staff",
         reason_code=code,
         reason_text="系统把这条判成重复了，实际是不同联系人",
@@ -144,7 +147,23 @@ def test_criterion2_same_person_two_roles_via_direct_rows_also_not_dual(
     ⚠️ 这条是**兜底**：验收标准 2 说的是「重复审批不计为双人审批」，
     而「双人」这个性质必须由**判定**保证，不能只由**写入**保证——
     否则换一条写入路径（数据修复、脚本）就能把它绕过去。
+
+    ⚠️⚠️ **为什么先 DROP 掉数据库唯一约束**：
+    现在表上有 `uq_dispute_approval_once_per_person`（同一争议、同一**人**
+    只能一行）⇒ 造不出「同一人两行」的数据 ⇒ 这条测试会**因为造不出
+    数据而变成空测试**（它测不到判定层了）。
+    ⇒ 这里**故意把约束删掉**，模拟「约束还不存在时写进去的存量数据」
+    ⇒ 再验**判定**层是否独立地把关。
+
+    ⚠️ DDL 在 PostgreSQL 是**事务性**的 ⇒ 用例结束时回滚 ⇒ 约束自动恢复
+    （不污染其它用例）。
     """
+    session.execute(
+        text("ALTER TABLE dispute_approval "
+             "DROP CONSTRAINT uq_dispute_approval_once_per_person")
+    )
+    session.flush()
+
     report = make_report(session, org_id, status="rejected_invalid")
     dispute = _submit(session, org_id, report)
 
@@ -166,6 +185,44 @@ def test_criterion2_same_person_two_roles_via_direct_rows_also_not_dual(
     quorum, satisfied, missing = evaluate_quorum(session, dispute.id)
     assert quorum is False
     assert missing == ("finance",)
+
+
+def test_approval_db_constraint_blocks_same_person_twice(session: Session, org_id):
+    """**数据库层**兜底：同一争议、同一**人**只能有一条审批记录。
+
+    ⚠️ 这条测的是**第一道防线**（表上的唯一约束），上一条测的是
+    **第二道防线**（判定层）⇒ 两道都要有，才叫「双人审批」。
+
+    ⚠️ 约束落在**人**上（不是「人+角色」）⇒ 同一个人**换角色**也写不进
+    第二行 ⇒ 并发下的 check-then-act 竞态也拦得住。
+    """
+    report = make_report(session, org_id, status="rejected_invalid")
+    dispute = _submit(session, org_id, report)
+
+    one_person = uuid.uuid4()
+    session.add(
+        DisputeApproval(
+            org_id=org_id,
+            dispute_id=dispute.id,
+            approver_id=one_person,
+            approver_role="channel_manager",
+            decision="overturn",
+        )
+    )
+    session.flush()
+
+    # 换角色再写一行 ⇒ 数据库直接拒
+    session.add(
+        DisputeApproval(
+            org_id=org_id,
+            dispute_id=dispute.id,
+            approver_id=one_person,
+            approver_role="finance",
+            decision="overturn",
+        )
+    )
+    with pytest.raises(IntegrityError):
+        session.flush()
 
 
 def test_criterion2_distinct_people_with_overlapping_roles_still_dual(
