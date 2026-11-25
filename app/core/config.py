@@ -40,6 +40,39 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+# DEFAULT_TOKEN_SECRET 是**兜底默认值**（本地开发/单测用）。
+#
+# ⚠️ **它同时是「生产不许用它」的判据**（见 validate_settings）：因为这个值
+#    **写在公开的交付仓库里**（任何人都能读到）⇒ ⇒ 生产拿它签发令牌等于
+#    **用公开已知的密钥签发登录令牌**。
+DEFAULT_TOKEN_SECRET = "dev-only-change-me"
+
+
+def validate_settings(settings: "Settings") -> None:
+    """校验配置；**不合法就抛异常**（调用方要么启动失败，要么不调它）。
+
+    ⚠️ **为什么只在生产拦**（实测 2026-11-25，订单 #2968 合规体检）：
+    #   - 本地开发与单测到处直接构造 `Settings()` ⇒ 若「没有默认值就不给」
+    #     ⇒ 到处都得先配环境变量 ⇒ ⇒ 改造成本大；
+    #   - 而**本地的默认值本身没有风险**（生产的密钥本来就不该是默认值）
+    #     ⇒ ⇒ 只在生产拦，恰好堵住「忘配环境变量 ⇒ 用公开密钥上线」这条路。
+    #
+    ⚠️ **与客户统一技术约定的关系**：「配置与密钥只从环境变量读取」
+    #   ⇒ 生产必须显式给 `APP_TOKEN_SECRET` ⇒ ⇒ 本闸门就是那条约定的守卫。
+    """
+    if not settings.is_production:
+        return
+    if not settings.token_secret.strip():
+        raise ValueError(
+            "生产环境必须设置 APP_TOKEN_SECRET（当前为空 ⇒ 签发的登录令牌任何人都能伪造）"
+        )
+    if settings.token_secret == DEFAULT_TOKEN_SECRET:
+        raise ValueError(
+            "生产环境不能使用默认的 APP_TOKEN_SECRET（dev-only-change-me）："
+            "该值写在公开的交付仓库里，任何人都能读到 ⇒ 等于用公开的密钥签发令牌"
+        )
+
+
 @dataclass(frozen=True)
 class Settings:
     """运行期配置快照。"""
@@ -47,7 +80,7 @@ class Settings:
     app_env: str = "local"
     database_url: str = "sqlite+pysqlite:///:memory:"
     redis_url: str = "redis://localhost:6379/0"
-    token_secret: str = "dev-only-change-me"
+    token_secret: str = DEFAULT_TOKEN_SECRET
     token_ttl_seconds: int = 3600
     # state / bind_ticket 默认 5 分钟
     qr_state_ttl_seconds: int = 300
@@ -77,7 +110,7 @@ class Settings:
                 ENV_DATABASE_URL, "sqlite+pysqlite:///:memory:"
             ),
             redis_url=os.getenv(ENV_REDIS_URL, "redis://localhost:6379/0"),
-            token_secret=os.getenv(ENV_TOKEN_SECRET, "dev-only-change-me"),
+            token_secret=os.getenv(ENV_TOKEN_SECRET, DEFAULT_TOKEN_SECRET),
             token_ttl_seconds=_env_int(ENV_TOKEN_TTL, 3600),
             qr_state_ttl_seconds=_env_int(ENV_QR_STATE_TTL, 300),
             qr_bind_ticket_ttl_seconds=_env_int(ENV_QR_BIND_TTL, 300),
