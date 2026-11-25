@@ -371,6 +371,8 @@ python3 scripts/show_qr_flow.py
 
 ```bash
 pip install -r requirements.txt          # fastapi / sqlalchemy / alembic / pyyaml / pytest …
+# 本次交付环境里 pypi.org 不可达，改用国内镜像安装（依赖版本按 requirements.txt 约束，与镜像无关）：
+# pip install --user --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
 
 # ① 建表（迁移）
 export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'   # 生产换成 PostgreSQL 16
