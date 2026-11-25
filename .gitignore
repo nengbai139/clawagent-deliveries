@@ -6,3 +6,7 @@ venv/
 *.egg-info/
 .coverage
 htmlcov/
+
+# 本地 SQLite 数据库（本地复核用，不入库）
+local_roles.db
+*.db

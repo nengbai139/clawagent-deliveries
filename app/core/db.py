@@ -34,5 +34,6 @@ def build_session_factory(engine: Engine) -> sessionmaker[Session]:
 def create_all(engine: Engine) -> None:
     # 确保业务模型已 import，表才注册到 metadata 里
     importlib.import_module("app.iam.models")
+    importlib.import_module("app.iam.roles.models")
 
     Base.metadata.create_all(engine)

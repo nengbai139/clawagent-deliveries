@@ -16,6 +16,7 @@ from app.api.iam.auth import login as login_routes
 from app.api.iam.auth import totp as totp_routes
 from app.api.iam.auth import qr as qr_routes
 from app.api.iam.me import identities as identity_routes
+from app.api.iam import roles as role_routes
 from app.core.config import Settings
 from app.core.db import build_engine, build_session_factory, create_all
 from app.core.redis_client import build_redis_client
@@ -57,6 +58,7 @@ def create_app(
     app.include_router(totp_routes.router)
     app.include_router(qr_routes.router)
     app.include_router(identity_routes.router)
+    app.include_router(role_routes.router)
 
     @app.get("/healthz", tags=["ops"])
     def healthz():
