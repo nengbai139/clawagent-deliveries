@@ -13,7 +13,6 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
-    Index,
     String,
     Text,
     UniqueConstraint,
@@ -80,7 +79,12 @@ class UserIdentity(Base):
             "external_user_id",
             name="uq_user_identities_provider_corp_user",
         ),
-        Index("ix_user_identities_employee", "employee_id"),
+        # ⚠️ **这里原来还有一个 Index("ix_user_identities_employee", "employee_id")**
+        #    ⇒ 而 `employee_id` 本身又带 `index=True` ⇒ ⇒ **两个索引打在同一个
+        #    列上**（autogenerate 实测：ix_user_identities_employee 与
+        #    ix_user_identities_employee_id 各建一个）⇒ ⇒ 纯冗余、写放大
+        #    ⇒ ⇒ 去掉显式那个，留自动生成的 `ix_user_identities_employee_id`。
+        #    （2026-11-25 合规体检时发现；迁移 0004 与模型已对齐。）
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_uuid)

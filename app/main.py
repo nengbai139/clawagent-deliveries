@@ -19,7 +19,7 @@ from app.api.iam.me import identities as identity_routes
 from app.api.iam import roles as role_routes
 from app.core.config import Settings
 from app.core.config import validate_settings
-from app.core.db import build_engine, build_session_factory, create_all
+from app.core.db import build_engine, build_session_factory, create_all, require_migrated
 from app.core.redis_client import build_redis_client
 from app.iam.auth.qr.registry import ProviderRegistry
 from app.iam.auth.totp import NotImplementedTotpVerifier
@@ -51,7 +51,20 @@ def create_app(
 
     if engine is None:
         engine = build_engine(settings.database_url)
-    create_all(engine)
+    # ⚠️ **生产不建表，只校验**（2026-11-25 合规体检）。
+    #
+    #	原先这里无条件 `create_all(engine)` ⇒ ⇒ 生产建表靠**应用启动副作用** ⇒
+    #	⇒ 表结构由**模型**决定、而不是**迁移** ⇒ ⇒ 偏离客户统一技术约定的
+    #	Alembic 要求（且模型改了结构、线上库却不会跟着变）⇒ ⇒ 现在：
+    #
+    #	  - **生产**：表必须已经由 `alembic upgrade head` 建好 ⇒ 缺表就**报错
+    #	    并说清怎么建**（fail-closed）⇒ 而不是悄悄建出一张和迁移不一致的表；
+    #	  - **非生产**：仍然 `create_all`（本地开发与单测要的是「一条命令就能跑」
+    #	    ⇒ 迁移链每次跑一遍太慢，也没必要）。
+    if settings.is_production:
+        require_migrated(engine)
+    else:
+        create_all(engine)
 
     app.state.settings = settings
     app.state.engine = engine
