@@ -25,9 +25,9 @@ def upgrade() -> None:
         sa.Column("role_id", sa.String(length=36), nullable=False),
         sa.Column("permission_code", sa.String(length=64), nullable=False),
         sa.Column("data_scope", sa.String(length=8), nullable=False),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("created_by", sa.String(length=36), nullable=True),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
         sa.ForeignKeyConstraint(
             ["role_id"], ["roles.id"], name="fk_role_permissions_role_id"
