@@ -1,0 +1,222 @@
+# 角色-权限矩阵（唯一真源）
+#
+# 本文件是 9 个内置岗位角色与其权限矩阵的唯一真源：
+#   * 种子脚本（python -m app.iam.roles.seed）读它写库；
+#   * Markdown 矩阵表（python -m app.iam.roles.export）由它渲染；
+#   * 一致性比对脚本（python -m app.iam.roles.compare）拿它跟数据库逐格比对。
+# Markdown 与数据库都由本文件派生，不要手写 Markdown。
+#
+# 权限点清单说明：本单内置 36 条权限点 code 的占位白名单（见下方 permissions）。
+# 正式的权限点注册表由另一单（S2-IAM 权限点注册表）发布，接入后只需替换本文件
+# 的 permissions 段与各角色引用，代码不用改 —— 对接点见 README「对接点」一节。
+#
+# 动作段解析规则：取 permission code 的最后一段（crm.read_basic → read_basic，
+# ai.assistant.use → use）。域段取第一段（ai.assistant.use → ai）。
+# data_scope 取值：self（仅本人）/ site（本会所）/ org（全组织）。
+#
+# 数据全部虚构，不含任何真实个人信息或企业信息。
+
+version: 1
+
+# 种子写入的租户（虚构）。多租户部署时由部署方覆盖。
+org_id: org-0001
+org_name: 会员空间平台（虚构组织）
+
+# ---------------------------------------------------------------------------
+# 权限点白名单（36 条）
+# ---------------------------------------------------------------------------
+permissions:
+  # 访客
+  - {code: visitor.read, label: 查看访客}
+  - {code: visitor.write, label: 登记 / 编辑访客}
+  # 签到
+  - {code: checkin.read, label: 查看签到记录}
+  - {code: checkin.write, label: 签到 / 签退操作}
+  # 场地预约与空间运营
+  - {code: space.read, label: 查看场地与预约}
+  - {code: space.write, label: 编辑场地与预约}
+  - {code: space.assign, label: 场地排期分配}
+  - {code: space.export, label: 导出场地与预约数据}
+  # 活动
+  - {code: event.read, label: 查看活动}
+  - {code: event.write, label: 编辑活动}
+  # 会员资料（CRM）
+  - {code: crm.read, label: 查看会员完整资料}
+  - {code: crm.read_basic, label: 查看会员基本信息}
+  - {code: crm.read_sensitive, label: 查看会员敏感字段}
+  - {code: crm.write, label: 编辑会员资料}
+  - {code: crm.follow_up, label: 记录会员跟进}
+  # 商机 / 需求撮合
+  - {code: opp.read, label: 查看商机与需求}
+  - {code: opp.write, label: 编辑商机}
+  - {code: opp.match, label: 写入撮合结果}
+  - {code: opp.assign, label: 商机分配}
+  - {code: opp.export, label: 导出商机数据}
+  # 招商（意向客户）
+  - {code: lead.read, label: 查看意向客户}
+  - {code: lead.write, label: 编辑意向客户}
+  - {code: lead.assign, label: 招商线索分配}
+  - {code: lead.export, label: 导出招商数据}
+  # 知识库
+  - {code: kb.read, label: 阅读知识库}
+  - {code: kb.write, label: 编辑知识库文档}
+  - {code: kb.manage, label: 管理知识库结构}
+  - {code: kb.publish, label: 发布知识库文档}
+  # AI 辅助工具
+  - {code: ai.assistant.use, label: 使用 AI 助手}
+  - {code: ai.review.approve, label: 审批 AI 产出}
+  # 身份与权限
+  - {code: iam.read, label: 查看角色与权限}
+  - {code: iam.write, label: 编辑角色与权限}
+  - {code: iam.manage, label: 管理角色体系}
+  # 系统运维
+  - {code: sys.read, label: 查看系统配置}
+  - {code: sys.manage, label: 管理系统配置}
+  # 审计
+  - {code: audit.read, label: 查看审计日志}
+
+# ---------------------------------------------------------------------------
+# 9 个内置岗位角色
+#
+# 口径说明：
+#   * 非组织数据维度的权限点（知识库 / AI 助手 / IAM / 系统 / 审计）统一按 org 落地；
+#     会员 / 商机 / 招商等业务数据按 self / site 落地。
+#   * 运营主管只管「运营（space 域）、商机（opp 域）、招商（lead 域）」的读写分配导出，
+#     不含任何 iam. / sys. 权限。
+#   * 系统管理员只持 iam. / sys. / audit. 权限，不含任何 crm. / opp. / lead. 业务数据权限。
+#   * 管理层只有 read / read_basic / use 三种动作，不含 write / manage / assign / export。
+# ---------------------------------------------------------------------------
+roles:
+  - code: front_desk
+    name: 前台接待
+    level: site
+    is_system: true
+    description: 前台接待：访客、签到、场地预约、活动查看、会员基本信息、知识阅读与 AI 助手
+    permissions:
+      - {code: visitor.read, data_scope: site}
+      - {code: visitor.write, data_scope: site}
+      - {code: checkin.read, data_scope: site}
+      - {code: checkin.write, data_scope: site}
+      - {code: space.read, data_scope: site}
+      - {code: event.read, data_scope: site}
+      - {code: crm.read_basic, data_scope: site}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: ops_specialist
+    name: 运营专员
+    level: site
+    is_system: true
+    description: 运营专员：访客、签到、场地与活动日常运营，会员基本信息只读
+    permissions:
+      - {code: visitor.read, data_scope: site}
+      - {code: visitor.write, data_scope: site}
+      - {code: checkin.read, data_scope: site}
+      - {code: checkin.write, data_scope: site}
+      - {code: space.read, data_scope: site}
+      - {code: space.write, data_scope: site}
+      - {code: space.assign, data_scope: site}
+      - {code: event.read, data_scope: site}
+      - {code: event.write, data_scope: site}
+      - {code: crm.read_basic, data_scope: site}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: member_manager
+    name: 会员经理
+    level: site
+    is_system: true
+    description: 会员经理：会员资料读取到本会所，写入 / 跟进 / 敏感字段读取仅限本人负责的会员
+    permissions:
+      - {code: crm.read, data_scope: site}
+      - {code: crm.read_basic, data_scope: site}
+      - {code: crm.read_sensitive, data_scope: self}
+      - {code: crm.write, data_scope: self}
+      - {code: crm.follow_up, data_scope: self}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: opportunity_manager
+    name: 商机经理
+    level: site
+    is_system: true
+    description: 商机经理：需求读取到全组织，撮合结果写入仅限本人
+    permissions:
+      - {code: opp.read, data_scope: org}
+      - {code: opp.write, data_scope: self}
+      - {code: opp.match, data_scope: self}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: bizdev_consultant
+    name: 招商顾问
+    level: site
+    is_system: true
+    description: 招商顾问：意向客户的读取与写入均仅限本人负责的客户
+    permissions:
+      - {code: lead.read, data_scope: self}
+      - {code: lead.write, data_scope: self}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: ops_supervisor
+    name: 运营主管
+    level: site
+    is_system: true
+    description: 运营主管：本会所的运营、商机、招商读写 / 分配 / 导出；不含任何 iam / sys 权限
+    permissions:
+      - {code: space.read, data_scope: site}
+      - {code: space.write, data_scope: site}
+      - {code: space.assign, data_scope: site}
+      - {code: space.export, data_scope: site}
+      - {code: opp.read, data_scope: site}
+      - {code: opp.write, data_scope: site}
+      - {code: opp.assign, data_scope: site}
+      - {code: opp.export, data_scope: site}
+      - {code: lead.read, data_scope: site}
+      - {code: lead.write, data_scope: site}
+      - {code: lead.assign, data_scope: site}
+      - {code: lead.export, data_scope: site}
+
+  - code: knowledge_admin
+    name: 知识管理员
+    level: org
+    is_system: true
+    description: 知识管理员：kb 全部权限（org）+ AI 产出审批与 AI 助手使用
+    permissions:
+      - {code: kb.read, data_scope: org}
+      - {code: kb.write, data_scope: org}
+      - {code: kb.manage, data_scope: org}
+      - {code: kb.publish, data_scope: org}
+      - {code: ai.review.approve, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: executive
+    name: 管理层
+    level: org
+    is_system: true
+    description: 管理层：只读与使用类权限（org），不含 write / manage / assign / export
+    permissions:
+      - {code: visitor.read, data_scope: org}
+      - {code: checkin.read, data_scope: org}
+      - {code: space.read, data_scope: org}
+      - {code: event.read, data_scope: org}
+      - {code: crm.read, data_scope: org}
+      - {code: crm.read_basic, data_scope: org}
+      - {code: opp.read, data_scope: org}
+      - {code: lead.read, data_scope: org}
+      - {code: kb.read, data_scope: org}
+      - {code: ai.assistant.use, data_scope: org}
+
+  - code: sys_admin
+    name: 系统管理员
+    level: org
+    is_system: true
+    description: 系统管理员：只持 iam / sys / audit 权限，不含任何 crm / opp / lead 业务数据权限（职责分离）
+    permissions:
+      - {code: iam.read, data_scope: org}
+      - {code: iam.write, data_scope: org}
+      - {code: iam.manage, data_scope: org}
+      - {code: sys.read, data_scope: org}
+      - {code: sys.manage, data_scope: org}
+      - {code: audit.read, data_scope: org}

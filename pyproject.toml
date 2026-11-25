@@ -13,6 +13,8 @@ dependencies = [
     "sqlalchemy>=2.0",
     "redis>=5.0",
     "pydantic>=2.5",
+    "alembic>=1.13",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -23,7 +25,10 @@ test = [
 ]
 
 [tool.setuptools]
-packages = ["app"]
+packages = ["app", "app.api", "app.api.iam", "app.api.iam.auth", "app.api.iam.me", "app.core", "app.iam", "app.iam.auth", "app.iam.auth.qr", "app.iam.roles"]
+
+[tool.setuptools.package-data]
+"app.iam.roles" = ["*.yml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
