@@ -2,11 +2,288 @@
 
 每张订单一个分支、一个 PR。分支命名：`order-<订单号>`。
 
+> **本分支 `order-2980` 对应订单 #2980**（【S2-IAM-015】九个岗位角色定义与权限矩阵种子数据）。
+> 本仓库按订单累积，每张订单各占一段；**本单内容在最前面的「订单 2980」段**，后面的「订单 2968」段是上一单，仅作迁移基线的上下文，不属于本单。
+
 PR 正文里写清：改了什么、怎么验、验收标准逐条对应、评审人（@发布者）。
 
 **为什么是公开仓库**：平台要求「交付物必须能被匿名取到」⇒ 私有仓库里的 PR 它的预检读不到 ⇒ 交付会被判不合格。
 
 ---
+
+# 订单 2980 ·【S2-IAM-015】会员空间平台 · 九个岗位角色定义与权限矩阵种子数据
+
+## 1. 技术栈
+
+| 项 | 选型 | 说明 |
+|----|------|------|
+| 语言 | Python 3.11+（实测 3.12） | 与仓库既有工单一致 |
+| Web | FastAPI | 角色增删查接口（`app/api/iam/roles.py`） |
+| ORM | SQLAlchemy 2.0 声明式（`Mapped` / `mapped_column`） | `roles` / `role_permissions` 两张表 |
+| 迁移 | Alembic | `migrations/versions/0001_roles.py`、`0002_role_permissions.py`，各含完整 downgrade |
+| 数据库 | PostgreSQL 16（生产）/ SQLite（本地与测试） | 连接串**只从环境变量 `APP_DATABASE_URL` 读取** |
+| 矩阵定义 | YAML（PyYAML） | `app/iam/roles/role_matrix.yml` 是唯一真源 |
+| 测试 | pytest 8+ | `tests/iam/test_role_matrix.py`（19 个用例） |
+| 第三方数据服务 | 无 | 未引入任何向境外发送数据的第三方 SDK |
+
+## 2. 交付物清单
+
+| # | 文件 | 内容 |
+|---|------|------|
+| 1 | `app/iam/roles/models.py` | `Role`（id/org_id/site_id/code/name/level/is_system/description + 统一审计与软删除字段）、`RolePermission`（role_id/permission_code/data_scope + 统一字段），`(role_id, permission_code)` 唯一 |
+| 2 | `app/iam/roles/constants.py` | 角色层级（site/org）与数据范围（self/site/org）取值常量 |
+| 3 | `app/iam/roles/role_matrix.yml` | **唯一真源**：36 条权限点白名单 + 9 个内置角色 × 权限点 × data_scope |
+| 4 | `app/iam/roles/matrix.py` | 读取并校验 yml（未知 code / 非法 scope / 重复配置 ⇒ 报错，不静默跳过）；动作段按 code 最后一段解析 |
+| 5 | `app/iam/roles/seed.py` | 幂等种子：按 (org_id, code) upsert 角色、按 (role_id, permission_code) upsert 权限行；不删除自定义角色 |
+| 6 | `app/iam/roles/export.py` | 由 yml 渲染 Markdown 矩阵表（行=权限点，列=角色，单元格=data_scope 或 `—`） |
+| 7 | `app/iam/roles/compare.py` | yml ↔ 数据库逐条三元组比对，差异不为 0 时非 0 退出码失败 |
+| 8 | `app/iam/roles/service.py` | 角色读写与删除保护（内置角色删除 ⇒ 409，角色不存在 ⇒ 404） |
+| 9 | `app/api/iam/roles.py` | `GET /api/iam/roles`、`POST /api/iam/roles`、`DELETE /api/iam/roles/{role_id}` |
+| 10 | `app/iam/roles/cli.py`、`app/iam/roles/init_db.py` | 命令行公共支撑；本地建表辅助（正式迁移走 Alembic） |
+| 11 | `alembic.ini`、`migrations/env.py`、`migrations/versions/0001_roles.py`、`migrations/versions/0002_create_role_permissions.py` | 两条迁移 + 完整 downgrade；连接串走 `APP_DATABASE_URL` |
+| 12 | `docs/role_matrix.md` | **生成的** Markdown 矩阵表（勿手改） |
+| 13 | `tests/iam/test_role_matrix.py` | pytest 测试，覆盖四条验收标准 |
+| 14 | `scripts/show_role_matrix.py` | 取证脚本：打印 9 个角色的权限矩阵 + 409/404/2xx 响应体 |
+
+## 3. 快速开始
+
+```bash
+pip install -r requirements.txt          # fastapi / sqlalchemy / alembic / pyyaml / pytest …
+# 本次交付环境里 pypi.org 不可达，改用国内镜像安装（依赖版本按 requirements.txt 约束，与镜像无关）：
+# pip install --user --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
+
+# ① 建表（迁移）
+export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'   # 生产换成 PostgreSQL 16
+python3 -m alembic upgrade head
+
+# ② 播种（幂等，可重复执行）
+python3 -m app.iam.roles.seed
+
+# ③ 生成 Markdown 矩阵表（写到 docs/role_matrix.md）
+python3 -m app.iam.roles.export
+
+# ④ 一致性比对（yml ↔ 数据库），差异不为 0 ⇒ 退出码 1
+python3 -m app.iam.roles.compare
+
+# ⑤ 跑测试
+python3 -m pytest -v tests/iam/test_role_matrix.py
+python3 -m pytest -v                       # 全量（含上一单 2968 的用例）
+```
+
+取证脚本（打印 9 个角色的权限矩阵 + 删除内置角色的 409 响应体）：
+
+```bash
+export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'
+python3 scripts/show_role_matrix.py
+```
+
+## 4. 验收标准逐条对应
+
+| 验收标准 | 实现 | 测试 / 证据 |
+|----------|------|------------|
+| **1. 种子执行后 9 个角色存在且 is_system=true，删除内置角色返回 409** | `app/iam/roles/seed.py`（9 个角色全部 `is_system=true`）、`app/iam/roles/service.py::delete_role`（内置角色抛 `role_is_system`）、`app/api/iam/roles.py`（映射为 409，错误体沿用仓库 `{"code","message"}` 格式） | `test_seed_creates_nine_system_roles`、`test_delete_system_role_returns_409`（断言 409 且记录仍在）、`test_delete_custom_role_succeeds`（自定义角色 2xx 可删）、`test_delete_missing_role_returns_404`（不存在 ⇒ 404 而非 409）、`test_seed_is_idempotent`；取证脚本输出见 §7.5 |
+| **2. 测试断言 sys_admin 不含任何以 crm.、opp.、lead. 开头的权限点** | yml 中 `sys_admin` 只配 `iam.read/iam.write/iam.manage/sys.read/sys.manage/audit.read`（org） | `test_sys_admin_has_no_business_domain_permissions`：遍历 sys_admin 的权限点集合，断言不存在以 `crm.`/`opp.`/`lead.` 开头的 code，并断言集合非空、data_scope 全为 `org` |
+| **3. 测试断言 executive 的权限点动作只有 read、read_basic、use 三种** | yml 中 `executive` 只配读类与使用类权限点（org） | `test_executive_actions_are_only_read_read_basic_use`：动作段（code 最后一段）⊆ {read, read_basic, use}，且三种都在集合内；另断言 write/manage/assign/export/publish/approve/read_sensitive 均不出现；data_scope 全 `org` |
+| **4. Markdown 矩阵表由 role_matrix.yml 生成，与数据库内容一致（脚本比对通过）** | `app/iam/roles/export.py` 渲染 `docs/role_matrix.md`；`app/iam/roles/compare.py` 按 (role_code, permission_code, data_scope) 三元组比对 | `test_compare_script_reports_no_difference`（差异 0 条）、`test_markdown_matrix_matches_database`（解析 Markdown 表格逐格与数据库比对）、`test_markdown_row_count_matches_permission_count`（行数 = 36 = 白名单条数）、`test_compare_detects_extra_permission` / `test_compare_detects_scope_mismatch`（造差异能被检出）；脚本原始输出见 §7.4 |
+
+## 5. 矩阵口径（9 个内置角色）
+
+| 角色 code | 名称 | 层级 | 权限口径 |
+|-----------|------|------|----------|
+| `front_desk` | 前台接待 | site | 访客、签到、场地预约、活动查看、会员基本信息（`crm.read_basic`）、知识阅读、AI 助手 —— 只有这 9 个权限点 |
+| `ops_specialist` | 运营专员 | site | 访客 / 签到 / 场地（读写分配）/ 活动读写 / 会员基本信息只读 + 知识与 AI |
+| `member_manager` | 会员经理 | site | 会员资料**读为 site**，**写 / 跟进 / 敏感读为 self** |
+| `opportunity_manager` | 商机经理 | site | **需求读取为 org**，**撮合写入（`opp.match`）为 self** |
+| `bizdev_consultant` | 招商顾问 | site | 意向客户**读写均为 self** |
+| `ops_supervisor` | 运营主管 | site | 本会所**运营（space）、商机（opp）、招商（lead）的读写 / 分配 / 导出**；**没有任何 iam.、sys. 权限** |
+| `knowledge_admin` | 知识管理员 | org | **只有 kb 全部权限（org）+ `ai.review.approve` + `ai.assistant.use`** |
+| `executive` | 管理层 | org | **只有 read / read_basic / use 三种动作**（org），无 write / manage / assign / export |
+| `sys_admin` | 系统管理员 | org | **只有 iam. / sys. / audit. 权限**，不含任何 `crm.` / `opp.` / `lead.` 业务数据权限（职责分离） |
+
+补充口径：
+
+* 非组织数据维度的权限点（知识库 / AI 助手 / IAM / 系统 / 审计）统一按 `org` 落地；会员 / 商机 / 招商等业务数据按 `self` / `site` 落地。
+* 动作段解析取 permission code 的**最后一段**（`crm.read_basic → read_basic`，`ai.assistant.use → use`），域段取第一段；域或对象名里出现 read / write 字样不影响判定。
+* 权限点白名单共 36 条（见 yml 的 `permissions` 段）；yml 出现白名单外的 code ⇒ 种子直接报错退出。
+
+## 6. 对接点（与其它工单的衔接）
+
+* **权限点注册表（另一单）**：本单内置 36 条权限点 code 的占位白名单（`app/iam/roles/matrix.py::PERMISSION_CODES` + yml 的 `permissions` 段）。正式清单合入后，只需替换这两处，代码不用改；yml 引用白名单外的 code 会直接报错，不会静默写入。
+* **运行时权限鉴权接入（另一单）**：本单只负责「角色 ⇒ 权限点 ⇒ data_scope」的数据，不在请求链路上做鉴权。`/api/iam/roles` 目前只要求已登录员工 + 组织隔离；「谁可以改角色」由运行时鉴权工单接入。
+* **员工与角色绑定**：`employees` 与 `roles` 的绑定关系（谁属于哪个角色）不在本单范围，本单只交付角色与权限矩阵本身。
+* **PostgreSQL 16**：本单用 SQLite 跑通了全部脚本与测试；生产连接串通过 `APP_DATABASE_URL` 注入（`postgresql+psycopg://...`），迁移脚本不含 SQLite 专有语法。
+* **既有迁移基线**：`employees` / `user_identities` / `audit_logs`（订单 2968）目前仍走 `create_all`；Alembic 基线由 S2-IAM 主线统一出，本单的两条迁移已按基线可直接串联的方式编写（`0001_roles` → `0002_role_permissions`）。
+
+## 7. 原始输出（证据）
+
+### 7.1 建表 + 播种（幂等）
+
+```console
+$ export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'
+$ python3 -m alembic upgrade head
+INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
+INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_roles, 创建 roles 表（S2-IAM-015 角色与权限矩阵）
+INFO  [alembic.runtime.migration] Running upgrade 0001_roles -> 0002_role_permissions, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
+
+$ python3 -m app.iam.roles.seed
+数据库：sqlite+pysqlite:///./local_roles.db
+角色（9 个）：front_desk, ops_specialist, member_manager, opportunity_manager, bizdev_consultant, ops_supervisor, knowledge_admin, executive, sys_admin
+角色：新建 9 个，更新 0 个；权限点：写入 71 条，清理矩阵外 0 条；库内权限行总数：71
+
+$ python3 -m app.iam.roles.seed          # 第二次：幂等，记录数不变
+数据库：sqlite+pysqlite:///./local_roles.db
+角色（9 个）：front_desk, ops_specialist, member_manager, opportunity_manager, bizdev_consultant, ops_supervisor, knowledge_admin, executive, sys_admin
+角色：新建 0 个，更新 9 个；权限点：写入 0 条，清理矩阵外 0 条；库内权限行总数：71
+
+$ python3 -c "import sqlite3; c=sqlite3.connect('local_roles.db'); print('roles:', c.execute('select count(*) from roles').fetchone()[0]); print('role_permissions:', c.execute('select count(*) from role_permissions').fetchone()[0])"
+roles: 9
+role_permissions: 71
+```
+
+### 7.2 pytest（本单 19 个用例）
+
+```console
+$ python3 -m pytest -v tests/iam/test_role_matrix.py
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0 -- /usr/bin/python3
+cachedir: .pytest_cache
+rootdir: .
+configfile: pyproject.toml
+testpaths: tests
+plugins: anyio-4.16.0
+collecting ... collected 19 items
+
+tests/iam/test_role_matrix.py::test_seed_creates_nine_system_roles PASSED [  5%]
+tests/iam/test_role_matrix.py::test_role_levels_follow_matrix PASSED     [ 10%]
+tests/iam/test_role_matrix.py::test_delete_system_role_returns_409 PASSED [ 15%]
+tests/iam/test_role_matrix.py::test_delete_custom_role_succeeds PASSED   [ 21%]
+tests/iam/test_role_matrix.py::test_delete_missing_role_returns_404 PASSED [ 26%]
+tests/iam/test_role_matrix.py::test_seed_is_idempotent PASSED            [ 31%]
+tests/iam/test_role_matrix.py::test_seed_rejects_unknown_permission_code PASSED [ 36%]
+tests/iam/test_role_matrix.py::test_sys_admin_has_no_business_domain_permissions PASSED [ 42%]
+tests/iam/test_role_matrix.py::test_executive_actions_are_only_read_read_basic_use PASSED [ 47%]
+tests/iam/test_role_matrix.py::test_matrix_matrix_data_scopes_follow_spec PASSED [ 52%]
+tests/iam/test_role_matrix.py::test_compare_script_reports_no_difference PASSED [ 57%]
+tests/iam/test_role_matrix.py::test_markdown_matrix_matches_database PASSED [ 63%]
+tests/iam/test_role_matrix.py::test_markdown_row_count_matches_permission_count PASSED [ 68%]
+tests/iam/test_role_matrix.py::test_export_markdown_writes_file PASSED   [ 73%]
+tests/iam/test_role_matrix.py::test_compare_detects_extra_permission PASSED [ 78%]
+tests/iam/test_role_matrix.py::test_compare_detects_scope_mismatch PASSED [ 84%]
+tests/iam/test_role_matrix.py::test_permission_whitelist_has_36_unique_codes PASSED [ 89%]
+tests/iam/test_role_matrix.py::test_every_whitelisted_permission_is_used_by_some_role PASSED [ 94%]
+tests/iam/test_role_matrix.py::test_role_codes_are_stable PASSED         [100%]
+
+=============================== warnings summary ===============================
+/tmp/clawagent-home-3325426589/.local/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /tmp/clawagent-home-3325426589/.local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+======================== 19 passed, 1 warning in 1.41s =========================
+```
+
+### 7.3 全量测试（上一单 2968 的用例不受影响）
+
+```console
+$ python3 -m pytest -v
+...
+======================== 46 passed, 1 warning in 3.29s =========================
+```
+
+### 7.4 一致性比对脚本（yml ↔ 数据库）
+
+```console
+$ python3 -m app.iam.roles.export
+已生成矩阵表：docs/role_matrix.md
+角色 9 个，权限点 36 条
+
+$ python3 -m app.iam.roles.compare
+数据库：sqlite+pysqlite:///./local_roles.db
+矩阵：9 个角色 × 36 条权限点
+比对结果：一致，差异 0 条
+
+# 造一条矩阵外的权限点后，比对必须报出差异并以非 0 退出码失败
+$ python3 -m app.iam.roles.compare
+数据库：sqlite+pysqlite:///./local_roles.db
+矩阵：9 个角色 × 36 条权限点
+比对结果：不一致，差异 1 条
+[多余] 库里有、矩阵里没有：role=front_desk permission=crm.read_sensitive data_scope=self
+$ echo $?
+1
+```
+
+### 7.5 取证脚本：删除内置角色 ⇒ 409
+
+```console
+$ python3 scripts/show_role_matrix.py
+### ① roles 表里的 9 个内置角色
+  - bizdev_consultant      招商顾问   level=site  is_system=True 权限点数=4
+  - executive              管理层    level=org   is_system=True 权限点数=10
+  - front_desk             前台接待   level=site  is_system=True 权限点数=9
+  - knowledge_admin        知识管理员  level=org   is_system=True 权限点数=6
+  - member_manager         会员经理   level=site  is_system=True 权限点数=7
+  - opportunity_manager    商机经理   level=site  is_system=True 权限点数=5
+  - ops_specialist         运营专员   level=site  is_system=True 权限点数=12
+  - ops_supervisor         运营主管   level=site  is_system=True 权限点数=12
+  - sys_admin              系统管理员  level=org   is_system=True 权限点数=6
+
+### ② 每个角色的权限点与数据范围（来自 role_permissions）
+  bizdev_consultant: ai.assistant.use=org, kb.read=org, lead.read=self, lead.write=self
+  executive: ai.assistant.use=org, checkin.read=org, crm.read=org, crm.read_basic=org, event.read=org, kb.read=org, lead.read=org, opp.read=org, space.read=org, visitor.read=org
+  front_desk: ai.assistant.use=org, checkin.read=site, checkin.write=site, crm.read_basic=site, event.read=site, kb.read=org, space.read=site, visitor.read=site, visitor.write=site
+  knowledge_admin: ai.assistant.use=org, ai.review.approve=org, kb.manage=org, kb.publish=org, kb.read=org, kb.write=org
+  member_manager: ai.assistant.use=org, crm.follow_up=self, crm.read=site, crm.read_basic=site, crm.read_sensitive=self, crm.write=self, kb.read=org
+  opportunity_manager: ai.assistant.use=org, kb.read=org, opp.match=self, opp.read=org, opp.write=self
+  ops_specialist: ai.assistant.use=org, checkin.read=site, checkin.write=site, crm.read_basic=site, event.read=site, event.write=site, kb.read=org, space.assign=site, space.read=site, space.write=site, visitor.read=site, visitor.write=site
+  ops_supervisor: lead.assign=site, lead.export=site, lead.read=site, lead.write=site, opp.assign=site, opp.export=site, opp.read=site, opp.write=site, space.assign=site, space.export=site, space.read=site, space.write=site
+  sys_admin: audit.read=org, iam.manage=org, iam.read=org, iam.write=org, sys.manage=org, sys.read=org
+
+### ③ DELETE 内置角色 ⇒ 409
+  HTTP 409
+  {'code': 'role_is_system', 'message': '内置角色不可删除：front_desk'}
+
+### ④ DELETE 不存在的角色 ⇒ 404
+  HTTP 404
+  {'code': 'role_not_found', 'message': '角色不存在'}
+
+### ⑤ 自定义角色可正常删除 ⇒ 2xx
+  创建：HTTP 200 id=bfe1c0d5-223f-47f3-9644-ed783f6f20b6
+  删除：HTTP 200
+  {'status': 'deleted', 'id': 'bfe1c0d5-223f-47f3-9644-ed783f6f20b6', 'code': 'evidence_temp_role'}
+```
+
+### 7.6 生成的 Markdown 矩阵表（节选，完整见 `docs/role_matrix.md`）
+
+```markdown
+| 权限点 | 动作 | front_desk<br>前台接待 | ops_specialist<br>运营专员 | member_manager<br>会员经理 | opportunity_manager<br>商机经理 | bizdev_consultant<br>招商顾问 | ops_supervisor<br>运营主管 | knowledge_admin<br>知识管理员 | executive<br>管理层 | sys_admin<br>系统管理员 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| `visitor.read` | read | site | site | — | — | — | — | — | org | — |
+| `visitor.write` | write | site | site | — | — | — | — | — | — | — |
+| `checkin.read` | read | site | site | — | — | — | — | — | org | — |
+| `checkin.write` | write | site | site | — | — | — | — | — | — | — |
+| `space.read` | read | site | site | — | — | — | site | — | org | — |
+| `space.write` | write | — | site | — | — | — | site | — | — | — |
+| `space.assign` | assign | — | site | — | — | — | site | — | — | — |
+| `space.export` | export | — | — | — | — | — | site | — | — | — |
+```
+
+### 7.7 迁移可逆（downgrade → upgrade）
+
+```console
+$ python3 -m alembic downgrade base
+INFO  [alembic.runtime.migration] Running downgrade 0002_role_permissions -> 0001_roles, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
+INFO  [alembic.runtime.migration] Running downgrade 0001_roles -> , 创建 roles 表（S2-IAM-015 角色与权限矩阵）
+剩余表: ['alembic_version']
+
+$ python3 -m alembic upgrade head
+INFO  [alembic.runtime.migration] Running upgrade  -> 0001_roles, 创建 roles 表（S2-IAM-015 角色与权限矩阵）
+INFO  [alembic.runtime.migration] Running upgrade 0001_roles -> 0002_role_permissions, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
+```
+
+---
+
+<!-- 以下是上一单（#2968）的内容，不是本单；保留是因为本单的迁移基线建立在它之上 -->
 
 # 订单 2968 ·【S2-IAM-011】会员空间平台 · 扫码登录适配器接口、state 校验与身份绑定流程
 
@@ -332,273 +609,3 @@ python3 scripts/show_qr_flow.py
 ```
 
 ---
-
-# 订单 2980 ·【S2-IAM-015】会员空间平台 · 九个岗位角色定义与权限矩阵种子数据
-
-## 1. 技术栈
-
-| 项 | 选型 | 说明 |
-|----|------|------|
-| 语言 | Python 3.11+（实测 3.12） | 与仓库既有工单一致 |
-| Web | FastAPI | 角色增删查接口（`app/api/iam/roles.py`） |
-| ORM | SQLAlchemy 2.0 声明式（`Mapped` / `mapped_column`） | `roles` / `role_permissions` 两张表 |
-| 迁移 | Alembic | `migrations/versions/0001_roles.py`、`0002_role_permissions.py`，各含完整 downgrade |
-| 数据库 | PostgreSQL 16（生产）/ SQLite（本地与测试） | 连接串**只从环境变量 `APP_DATABASE_URL` 读取** |
-| 矩阵定义 | YAML（PyYAML） | `app/iam/roles/role_matrix.yml` 是唯一真源 |
-| 测试 | pytest 8+ | `tests/iam/test_role_matrix.py`（19 个用例） |
-| 第三方数据服务 | 无 | 未引入任何向境外发送数据的第三方 SDK |
-
-## 2. 交付物清单
-
-| # | 文件 | 内容 |
-|---|------|------|
-| 1 | `app/iam/roles/models.py` | `Role`（id/org_id/site_id/code/name/level/is_system/description + 统一审计与软删除字段）、`RolePermission`（role_id/permission_code/data_scope + 统一字段），`(role_id, permission_code)` 唯一 |
-| 2 | `app/iam/roles/constants.py` | 角色层级（site/org）与数据范围（self/site/org）取值常量 |
-| 3 | `app/iam/roles/role_matrix.yml` | **唯一真源**：36 条权限点白名单 + 9 个内置角色 × 权限点 × data_scope |
-| 4 | `app/iam/roles/matrix.py` | 读取并校验 yml（未知 code / 非法 scope / 重复配置 ⇒ 报错，不静默跳过）；动作段按 code 最后一段解析 |
-| 5 | `app/iam/roles/seed.py` | 幂等种子：按 (org_id, code) upsert 角色、按 (role_id, permission_code) upsert 权限行；不删除自定义角色 |
-| 6 | `app/iam/roles/export.py` | 由 yml 渲染 Markdown 矩阵表（行=权限点，列=角色，单元格=data_scope 或 `—`） |
-| 7 | `app/iam/roles/compare.py` | yml ↔ 数据库逐条三元组比对，差异不为 0 时非 0 退出码失败 |
-| 8 | `app/iam/roles/service.py` | 角色读写与删除保护（内置角色删除 ⇒ 409，角色不存在 ⇒ 404） |
-| 9 | `app/api/iam/roles.py` | `GET /api/iam/roles`、`POST /api/iam/roles`、`DELETE /api/iam/roles/{role_id}` |
-| 10 | `app/iam/roles/cli.py`、`app/iam/roles/init_db.py` | 命令行公共支撑；本地建表辅助（正式迁移走 Alembic） |
-| 11 | `alembic.ini`、`migrations/env.py`、`migrations/versions/0001_roles.py`、`migrations/versions/0002_create_role_permissions.py` | 两条迁移 + 完整 downgrade；连接串走 `APP_DATABASE_URL` |
-| 12 | `docs/role_matrix.md` | **生成的** Markdown 矩阵表（勿手改） |
-| 13 | `tests/iam/test_role_matrix.py` | pytest 测试，覆盖四条验收标准 |
-| 14 | `scripts/show_role_matrix.py` | 取证脚本：打印 9 个角色的权限矩阵 + 409/404/2xx 响应体 |
-
-## 3. 快速开始
-
-```bash
-pip install -r requirements.txt          # fastapi / sqlalchemy / alembic / pyyaml / pytest …
-# 本次交付环境里 pypi.org 不可达，改用国内镜像安装（依赖版本按 requirements.txt 约束，与镜像无关）：
-# pip install --user --break-system-packages -i https://mirrors.aliyun.com/pypi/simple/ -r requirements.txt
-
-# ① 建表（迁移）
-export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'   # 生产换成 PostgreSQL 16
-python3 -m alembic upgrade head
-
-# ② 播种（幂等，可重复执行）
-python3 -m app.iam.roles.seed
-
-# ③ 生成 Markdown 矩阵表（写到 docs/role_matrix.md）
-python3 -m app.iam.roles.export
-
-# ④ 一致性比对（yml ↔ 数据库），差异不为 0 ⇒ 退出码 1
-python3 -m app.iam.roles.compare
-
-# ⑤ 跑测试
-python3 -m pytest -v tests/iam/test_role_matrix.py
-python3 -m pytest -v                       # 全量（含上一单 2968 的用例）
-```
-
-取证脚本（打印 9 个角色的权限矩阵 + 删除内置角色的 409 响应体）：
-
-```bash
-export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'
-python3 scripts/show_role_matrix.py
-```
-
-## 4. 验收标准逐条对应
-
-| 验收标准 | 实现 | 测试 / 证据 |
-|----------|------|------------|
-| **1. 种子执行后 9 个角色存在且 is_system=true，删除内置角色返回 409** | `app/iam/roles/seed.py`（9 个角色全部 `is_system=true`）、`app/iam/roles/service.py::delete_role`（内置角色抛 `role_is_system`）、`app/api/iam/roles.py`（映射为 409，错误体沿用仓库 `{"code","message"}` 格式） | `test_seed_creates_nine_system_roles`、`test_delete_system_role_returns_409`（断言 409 且记录仍在）、`test_delete_custom_role_succeeds`（自定义角色 2xx 可删）、`test_delete_missing_role_returns_404`（不存在 ⇒ 404 而非 409）、`test_seed_is_idempotent`；取证脚本输出见 §7.5 |
-| **2. 测试断言 sys_admin 不含任何以 crm.、opp.、lead. 开头的权限点** | yml 中 `sys_admin` 只配 `iam.read/iam.write/iam.manage/sys.read/sys.manage/audit.read`（org） | `test_sys_admin_has_no_business_domain_permissions`：遍历 sys_admin 的权限点集合，断言不存在以 `crm.`/`opp.`/`lead.` 开头的 code，并断言集合非空、data_scope 全为 `org` |
-| **3. 测试断言 executive 的权限点动作只有 read、read_basic、use 三种** | yml 中 `executive` 只配读类与使用类权限点（org） | `test_executive_actions_are_only_read_read_basic_use`：动作段（code 最后一段）⊆ {read, read_basic, use}，且三种都在集合内；另断言 write/manage/assign/export/publish/approve/read_sensitive 均不出现；data_scope 全 `org` |
-| **4. Markdown 矩阵表由 role_matrix.yml 生成，与数据库内容一致（脚本比对通过）** | `app/iam/roles/export.py` 渲染 `docs/role_matrix.md`；`app/iam/roles/compare.py` 按 (role_code, permission_code, data_scope) 三元组比对 | `test_compare_script_reports_no_difference`（差异 0 条）、`test_markdown_matrix_matches_database`（解析 Markdown 表格逐格与数据库比对）、`test_markdown_row_count_matches_permission_count`（行数 = 36 = 白名单条数）、`test_compare_detects_extra_permission` / `test_compare_detects_scope_mismatch`（造差异能被检出）；脚本原始输出见 §7.4 |
-
-## 5. 矩阵口径（9 个内置角色）
-
-| 角色 code | 名称 | 层级 | 权限口径 |
-|-----------|------|------|----------|
-| `front_desk` | 前台接待 | site | 访客、签到、场地预约、活动查看、会员基本信息（`crm.read_basic`）、知识阅读、AI 助手 —— 只有这 9 个权限点 |
-| `ops_specialist` | 运营专员 | site | 访客 / 签到 / 场地（读写分配）/ 活动读写 / 会员基本信息只读 + 知识与 AI |
-| `member_manager` | 会员经理 | site | 会员资料**读为 site**，**写 / 跟进 / 敏感读为 self** |
-| `opportunity_manager` | 商机经理 | site | **需求读取为 org**，**撮合写入（`opp.match`）为 self** |
-| `bizdev_consultant` | 招商顾问 | site | 意向客户**读写均为 self** |
-| `ops_supervisor` | 运营主管 | site | 本会所**运营（space）、商机（opp）、招商（lead）的读写 / 分配 / 导出**；**没有任何 iam.、sys. 权限** |
-| `knowledge_admin` | 知识管理员 | org | **只有 kb 全部权限（org）+ `ai.review.approve` + `ai.assistant.use`** |
-| `executive` | 管理层 | org | **只有 read / read_basic / use 三种动作**（org），无 write / manage / assign / export |
-| `sys_admin` | 系统管理员 | org | **只有 iam. / sys. / audit. 权限**，不含任何 `crm.` / `opp.` / `lead.` 业务数据权限（职责分离） |
-
-补充口径：
-
-* 非组织数据维度的权限点（知识库 / AI 助手 / IAM / 系统 / 审计）统一按 `org` 落地；会员 / 商机 / 招商等业务数据按 `self` / `site` 落地。
-* 动作段解析取 permission code 的**最后一段**（`crm.read_basic → read_basic`，`ai.assistant.use → use`），域段取第一段；域或对象名里出现 read / write 字样不影响判定。
-* 权限点白名单共 36 条（见 yml 的 `permissions` 段）；yml 出现白名单外的 code ⇒ 种子直接报错退出。
-
-## 6. 对接点（与其它工单的衔接）
-
-* **权限点注册表（另一单）**：本单内置 36 条权限点 code 的占位白名单（`app/iam/roles/matrix.py::PERMISSION_CODES` + yml 的 `permissions` 段）。正式清单合入后，只需替换这两处，代码不用改；yml 引用白名单外的 code 会直接报错，不会静默写入。
-* **运行时权限鉴权接入（另一单）**：本单只负责「角色 ⇒ 权限点 ⇒ data_scope」的数据，不在请求链路上做鉴权。`/api/iam/roles` 目前只要求已登录员工 + 组织隔离；「谁可以改角色」由运行时鉴权工单接入。
-* **员工与角色绑定**：`employees` 与 `roles` 的绑定关系（谁属于哪个角色）不在本单范围，本单只交付角色与权限矩阵本身。
-* **PostgreSQL 16**：本单用 SQLite 跑通了全部脚本与测试；生产连接串通过 `APP_DATABASE_URL` 注入（`postgresql+psycopg://...`），迁移脚本不含 SQLite 专有语法。
-* **既有迁移基线**：`employees` / `user_identities` / `audit_logs`（订单 2968）目前仍走 `create_all`；Alembic 基线由 S2-IAM 主线统一出，本单的两条迁移已按基线可直接串联的方式编写（`0001_roles` → `0002_role_permissions`）。
-
-## 7. 原始输出（证据）
-
-### 7.1 建表 + 播种（幂等）
-
-```console
-$ export APP_DATABASE_URL='sqlite+pysqlite:///./local_roles.db'
-$ python3 -m alembic upgrade head
-INFO  [alembic.runtime.migration] Context impl SQLiteImpl.
-INFO  [alembic.runtime.migration] Will assume non-transactional DDL.
-INFO  [alembic.runtime.migration] Running upgrade  -> 0001_roles, 创建 roles 表（S2-IAM-015 角色与权限矩阵）
-INFO  [alembic.runtime.migration] Running upgrade 0001_roles -> 0002_role_permissions, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
-
-$ python3 -m app.iam.roles.seed
-数据库：sqlite+pysqlite:///./local_roles.db
-角色（9 个）：front_desk, ops_specialist, member_manager, opportunity_manager, bizdev_consultant, ops_supervisor, knowledge_admin, executive, sys_admin
-角色：新建 9 个，更新 0 个；权限点：写入 71 条，清理矩阵外 0 条；库内权限行总数：71
-
-$ python3 -m app.iam.roles.seed          # 第二次：幂等，记录数不变
-数据库：sqlite+pysqlite:///./local_roles.db
-角色（9 个）：front_desk, ops_specialist, member_manager, opportunity_manager, bizdev_consultant, ops_supervisor, knowledge_admin, executive, sys_admin
-角色：新建 0 个，更新 9 个；权限点：写入 0 条，清理矩阵外 0 条；库内权限行总数：71
-
-$ python3 -c "import sqlite3; c=sqlite3.connect('local_roles.db'); print('roles:', c.execute('select count(*) from roles').fetchone()[0]); print('role_permissions:', c.execute('select count(*) from role_permissions').fetchone()[0])"
-roles: 9
-role_permissions: 71
-```
-
-### 7.2 pytest（本单 19 个用例）
-
-```console
-$ python3 -m pytest -v tests/iam/test_role_matrix.py
-============================= test session starts ==============================
-platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0 -- /usr/bin/python3
-cachedir: .pytest_cache
-rootdir: .
-configfile: pyproject.toml
-testpaths: tests
-plugins: anyio-4.16.0
-collecting ... collected 19 items
-
-tests/iam/test_role_matrix.py::test_seed_creates_nine_system_roles PASSED [  5%]
-tests/iam/test_role_matrix.py::test_role_levels_follow_matrix PASSED     [ 10%]
-tests/iam/test_role_matrix.py::test_delete_system_role_returns_409 PASSED [ 15%]
-tests/iam/test_role_matrix.py::test_delete_custom_role_succeeds PASSED   [ 21%]
-tests/iam/test_role_matrix.py::test_delete_missing_role_returns_404 PASSED [ 26%]
-tests/iam/test_role_matrix.py::test_seed_is_idempotent PASSED            [ 31%]
-tests/iam/test_role_matrix.py::test_seed_rejects_unknown_permission_code PASSED [ 36%]
-tests/iam/test_role_matrix.py::test_sys_admin_has_no_business_domain_permissions PASSED [ 42%]
-tests/iam/test_role_matrix.py::test_executive_actions_are_only_read_read_basic_use PASSED [ 47%]
-tests/iam/test_role_matrix.py::test_matrix_matrix_data_scopes_follow_spec PASSED [ 52%]
-tests/iam/test_role_matrix.py::test_compare_script_reports_no_difference PASSED [ 57%]
-tests/iam/test_role_matrix.py::test_markdown_matrix_matches_database PASSED [ 63%]
-tests/iam/test_role_matrix.py::test_markdown_row_count_matches_permission_count PASSED [ 68%]
-tests/iam/test_role_matrix.py::test_export_markdown_writes_file PASSED   [ 73%]
-tests/iam/test_role_matrix.py::test_compare_detects_extra_permission PASSED [ 78%]
-tests/iam/test_role_matrix.py::test_compare_detects_scope_mismatch PASSED [ 84%]
-tests/iam/test_role_matrix.py::test_permission_whitelist_has_36_unique_codes PASSED [ 89%]
-tests/iam/test_role_matrix.py::test_every_whitelisted_permission_is_used_by_some_role PASSED [ 94%]
-tests/iam/test_role_matrix.py::test_role_codes_are_stable PASSED         [100%]
-
-=============================== warnings summary ===============================
-/tmp/clawagent-home-3325426589/.local/lib/python3.12/site-packages/fastapi/testclient.py:1
-  /tmp/clawagent-home-3325426589/.local/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
-    from starlette.testclient import TestClient as TestClient  # noqa
-
--- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
-======================== 19 passed, 1 warning in 1.41s =========================
-```
-
-### 7.3 全量测试（上一单 2968 的用例不受影响）
-
-```console
-$ python3 -m pytest -v
-...
-======================== 46 passed, 1 warning in 3.29s =========================
-```
-
-### 7.4 一致性比对脚本（yml ↔ 数据库）
-
-```console
-$ python3 -m app.iam.roles.export
-已生成矩阵表：docs/role_matrix.md
-角色 9 个，权限点 36 条
-
-$ python3 -m app.iam.roles.compare
-数据库：sqlite+pysqlite:///./local_roles.db
-矩阵：9 个角色 × 36 条权限点
-比对结果：一致，差异 0 条
-
-# 造一条矩阵外的权限点后，比对必须报出差异并以非 0 退出码失败
-$ python3 -m app.iam.roles.compare
-数据库：sqlite+pysqlite:///./local_roles.db
-矩阵：9 个角色 × 36 条权限点
-比对结果：不一致，差异 1 条
-[多余] 库里有、矩阵里没有：role=front_desk permission=crm.read_sensitive data_scope=self
-$ echo $?
-1
-```
-
-### 7.5 取证脚本：删除内置角色 ⇒ 409
-
-```console
-$ python3 scripts/show_role_matrix.py
-### ① roles 表里的 9 个内置角色
-  - bizdev_consultant      招商顾问   level=site  is_system=True 权限点数=4
-  - executive              管理层    level=org   is_system=True 权限点数=10
-  - front_desk             前台接待   level=site  is_system=True 权限点数=9
-  - knowledge_admin        知识管理员  level=org   is_system=True 权限点数=6
-  - member_manager         会员经理   level=site  is_system=True 权限点数=7
-  - opportunity_manager    商机经理   level=site  is_system=True 权限点数=5
-  - ops_specialist         运营专员   level=site  is_system=True 权限点数=12
-  - ops_supervisor         运营主管   level=site  is_system=True 权限点数=12
-  - sys_admin              系统管理员  level=org   is_system=True 权限点数=6
-
-### ② 每个角色的权限点与数据范围（来自 role_permissions）
-  bizdev_consultant: ai.assistant.use=org, kb.read=org, lead.read=self, lead.write=self
-  executive: ai.assistant.use=org, checkin.read=org, crm.read=org, crm.read_basic=org, event.read=org, kb.read=org, lead.read=org, opp.read=org, space.read=org, visitor.read=org
-  front_desk: ai.assistant.use=org, checkin.read=site, checkin.write=site, crm.read_basic=site, event.read=site, kb.read=org, space.read=site, visitor.read=site, visitor.write=site
-  knowledge_admin: ai.assistant.use=org, ai.review.approve=org, kb.manage=org, kb.publish=org, kb.read=org, kb.write=org
-  member_manager: ai.assistant.use=org, crm.follow_up=self, crm.read=site, crm.read_basic=site, crm.read_sensitive=self, crm.write=self, kb.read=org
-  opportunity_manager: ai.assistant.use=org, kb.read=org, opp.match=self, opp.read=org, opp.write=self
-  ops_specialist: ai.assistant.use=org, checkin.read=site, checkin.write=site, crm.read_basic=site, event.read=site, event.write=site, kb.read=org, space.assign=site, space.read=site, space.write=site, visitor.read=site, visitor.write=site
-  ops_supervisor: lead.assign=site, lead.export=site, lead.read=site, lead.write=site, opp.assign=site, opp.export=site, opp.read=site, opp.write=site, space.assign=site, space.export=site, space.read=site, space.write=site
-  sys_admin: audit.read=org, iam.manage=org, iam.read=org, iam.write=org, sys.manage=org, sys.read=org
-
-### ③ DELETE 内置角色 ⇒ 409
-  HTTP 409
-  {'code': 'role_is_system', 'message': '内置角色不可删除：front_desk'}
-
-### ④ DELETE 不存在的角色 ⇒ 404
-  HTTP 404
-  {'code': 'role_not_found', 'message': '角色不存在'}
-
-### ⑤ 自定义角色可正常删除 ⇒ 2xx
-  创建：HTTP 200 id=bfe1c0d5-223f-47f3-9644-ed783f6f20b6
-  删除：HTTP 200
-  {'status': 'deleted', 'id': 'bfe1c0d5-223f-47f3-9644-ed783f6f20b6', 'code': 'evidence_temp_role'}
-```
-
-### 7.6 生成的 Markdown 矩阵表（节选，完整见 `docs/role_matrix.md`）
-
-```markdown
-| 权限点 | 动作 | front_desk<br>前台接待 | ops_specialist<br>运营专员 | member_manager<br>会员经理 | opportunity_manager<br>商机经理 | bizdev_consultant<br>招商顾问 | ops_supervisor<br>运营主管 | knowledge_admin<br>知识管理员 | executive<br>管理层 | sys_admin<br>系统管理员 |
-|---|---|---|---|---|---|---|---|---|---|---|
-| `visitor.read` | read | site | site | — | — | — | — | — | org | — |
-| `visitor.write` | write | site | site | — | — | — | — | — | — | — |
-| `checkin.read` | read | site | site | — | — | — | — | — | org | — |
-| `checkin.write` | write | site | site | — | — | — | — | — | — | — |
-| `space.read` | read | site | site | — | — | — | site | — | org | — |
-| `space.write` | write | — | site | — | — | — | site | — | — | — |
-| `space.assign` | assign | — | site | — | — | — | site | — | — | — |
-| `space.export` | export | — | — | — | — | — | site | — | — | — |
-```
-
-### 7.7 迁移可逆（downgrade → upgrade）
-
-```console
-$ python3 -m alembic downgrade base
-INFO  [alembic.runtime.migration] Running downgrade 0002_role_permissions -> 0001_roles, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
-INFO  [alembic.runtime.migration] Running downgrade 0001_roles -> , 创建 roles 表（S2-IAM-015 角色与权限矩阵）
-剩余表: ['alembic_version']
-
-$ python3 -m alembic upgrade head
-INFO  [alembic.runtime.migration] Running upgrade  -> 0001_roles, 创建 roles 表（S2-IAM-015 角色与权限矩阵）
-INFO  [alembic.runtime.migration] Running upgrade 0001_roles -> 0002_role_permissions, 创建 role_permissions 表（S2-IAM-015 角色与权限矩阵）
-```
