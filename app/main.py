@@ -18,6 +18,7 @@ from app.api.iam.auth import qr as qr_routes
 from app.api.iam.me import identities as identity_routes
 from app.api.iam import roles as role_routes
 from app.core.config import Settings
+from app.core.config import validate_settings
 from app.core.db import build_engine, build_session_factory, create_all
 from app.core.redis_client import build_redis_client
 from app.iam.auth.qr.registry import ProviderRegistry
@@ -36,6 +37,11 @@ def create_app(
     totp_verifier=None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
+
+    # ⚠️ **生产守卫**（2026-11-25，订单 #2968 合规体检）：生产环境用**兜底
+    #    默认密钥**（它写在公开的交付仓库里）⇒ 等于用公开已知的密钥签发登录
+    #    令牌 ⇒ ⇒ **拒绝启动**（fail-closed）⇒ 而不是照常起来再让人发现。
+    validate_settings(settings)
 
     app = FastAPI(
         title="会员空间平台 · IAM",
