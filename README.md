@@ -160,7 +160,7 @@ $ python3 -m pytest -v
 ============================= test session starts ==============================
 platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0 -- /usr/bin/python3
 cachedir: .pytest_cache
-rootdir: /var/lib/clawagent/work/clawagent-work-3545530137
+rootdir: .
 configfile: pyproject.toml
 testpaths: tests
 plugins: anyio-4.16.0
@@ -470,7 +470,7 @@ $ python3 -m pytest -v tests/iam/test_role_matrix.py
 ============================= test session starts ==============================
 platform linux -- Python 3.12.3, pytest-9.2.0, pluggy-1.7.0 -- /usr/bin/python3
 cachedir: .pytest_cache
-rootdir: /var/lib/clawagent/work/clawagent-work-135223254
+rootdir: .
 configfile: pyproject.toml
 testpaths: tests
 plugins: anyio-4.16.0
@@ -517,7 +517,7 @@ $ python3 -m pytest -v
 
 ```console
 $ python3 -m app.iam.roles.export
-已生成矩阵表：/var/lib/clawagent/work/clawagent-work-135223254/docs/role_matrix.md
+已生成矩阵表：docs/role_matrix.md
 角色 9 个，权限点 36 条
 
 $ python3 -m app.iam.roles.compare
