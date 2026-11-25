@@ -85,8 +85,11 @@ def test_migration_chain_matches_models(tmp_path):
     from app.core.db import Base, build_engine
 
     # ⚠️ **要 import 全部模型模块** ⇒ 否则 Base.metadata 里只有被 import 到的表。
-    import app.iam.models  # noqa: F401
-    import app.iam.roles.models  # noqa: F401
+    #    ⚠️ 用**自动发现**（db._import_all_models）⇒ 哪个分支有什么就导入什么
+    #    ⇒ 这条测试在**任何订单的分支上都能跑**（写死 import 列表 ⇒ 换分支就漏表）。
+    from app.core.db import _import_all_models
+
+    _import_all_models()
 
     engine = build_engine(f"sqlite+pysqlite:///{models_db}")
     Base.metadata.create_all(engine)
@@ -103,19 +106,25 @@ def test_migration_chain_matches_models(tmp_path):
         )
 
 
-def test_migration_chain_has_all_five_tables(tmp_path):
-    """迁移链要建出全部 5 张表（含上一单 2980 的两张）。"""
+def test_migration_chain_has_exactly_the_model_tables(tmp_path):
+    """迁移链建出来的表 == 模型声明的表（**按模型推导**，不写死表名）。
+
+    ⚠️ **为什么按模型推导**：这个交付仓库是**多单累积**的 ⇒ 每单分支带的
+    模型模块**不一样**（订单 2968 的分支有 3 张表，订单 2980 的分支再有
+    2 张）⇒ ⇒ 写死表名 ⇒ 另一个分支上这条测试必红 ⇒ ⇒ ⇒ 期望值必须
+    **从模型推导**。
+    """
+    from app.core.db import Base, _import_all_models
+
+    _import_all_models()
+
     db = tmp_path / "all.db"
     _run_alembic(db, "upgrade", "head")
     engine = create_engine(f"sqlite+pysqlite:///{db}")
     names = set(inspect(engine).get_table_names()) - {"alembic_version"}
-    assert names == {
-        "employees",
-        "user_identities",
-        "audit_logs",
-        "roles",
-        "role_permissions",
-    }
+    expected = set(Base.metadata.tables)
+    assert names == expected, f"迁移链建出 {sorted(names)}，模型声明 {sorted(expected)}"
+    assert expected, "模型里一张表都没有 ⇒ 一定是 import 没生效"
 
 
 def test_downgrade_base_removes_everything(tmp_path):
@@ -143,18 +152,26 @@ def test_business_tables_have_the_standard_columns(tmp_path):
         "updated_at",
         "deleted_at",
     }
-    for table in ("employees", "user_identities", "audit_logs", "roles", "role_permissions"):
+    from app.core.db import Base, _import_all_models
+
+    _import_all_models()
+
+    for table in sorted(Base.metadata.tables):
         cols = {c["name"] for c in insp.get_columns(table)}
         missing = required - cols
         assert not missing, f"{table} 缺统一约定的字段：{sorted(missing)}"
 
 
-@pytest.mark.parametrize("table", ["employees", "user_identities", "audit_logs"])
-def test_soft_delete_column_exists(tmp_path, table):
-    """软删除字段必须是可空的（有值 = 已删）。"""
-    db = tmp_path / f"sd_{table}.db"
+def test_soft_delete_column_is_nullable(tmp_path):
+    """每张业务表的 deleted_at 都必须**可空**（NULL = 未删除）。"""
+    from app.core.db import Base, _import_all_models
+
+    _import_all_models()
+
+    db = tmp_path / "sd.db"
     _run_alembic(db, "upgrade", "head")
     engine = create_engine(f"sqlite+pysqlite:///{db}")
     insp = inspect(engine)
-    col = next(c for c in insp.get_columns(table) if c["name"] == "deleted_at")
-    assert col["nullable"] is True, "deleted_at 必须可空（NULL = 未删除）"
+    for table in sorted(Base.metadata.tables):
+        col = next(c for c in insp.get_columns(table) if c["name"] == "deleted_at")
+        assert col["nullable"] is True, f"{table}.deleted_at 必须可空（NULL = 未删除）"

@@ -58,7 +58,7 @@ def validate_settings(settings: "Settings") -> None:
     #     ⇒ ⇒ 只在生产拦，恰好堵住「忘配环境变量 ⇒ 用公开密钥上线」这条路。
     #
     ⚠️ **与客户统一技术约定的关系**：「配置与密钥只从环境变量读取」
-    ⇒ 生产必须显式给 `APP_TOKEN_SECRET` ⇒ ⇒ 本闸门就是那条约定的守卫。
+    #   ⇒ 生产必须显式给 `APP_TOKEN_SECRET` ⇒ ⇒ 本闸门就是那条约定的守卫。
     """
     if not settings.is_production:
         return

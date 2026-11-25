@@ -19,8 +19,24 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app.core.db import Base  # noqa: E402
-import app.iam.models  # noqa: E402,F401
-import app.iam.roles.models  # noqa: E402,F401
+
+# ⚠️ **自动发现模型模块**（不要写死 import 列表）。
+#
+#	**为什么**（实测 2026-11-25）：这个交付仓库是**多单累积**的 ⇒ 每单的分支
+#	带的模型模块**不一样**（订单 2968 有 `app/iam/models.py`，订单 2980 又有
+#	`app/iam/roles/models.py`）⇒ ⇒ 写死 import 列表 ⇒ 换分支就 import 失败
+#	（`ModuleNotFoundError`）⇒ ⇒ **两个分支就得各维护一份 env.py** ⇒ ⇒
+#	合并时冲突、且一单新增模型模块时还得记得改这里。
+#	⇒ ⇒ 改成**遍历 app 包、import 所有名字以 models 结尾的模块** ⇒ ⇒
+#	哪个分支有什么就导入什么 ⇒ ⇒ **一份 env.py 通用**。
+import importlib  # noqa: E402
+import pkgutil  # noqa: E402
+
+import app  # noqa: E402
+
+for _m in pkgutil.walk_packages(app.__path__, prefix="app."):
+    if _m.name.endswith(".models"):
+        importlib.import_module(_m.name)
 
 config = context.config
 if config.config_file_name is not None:

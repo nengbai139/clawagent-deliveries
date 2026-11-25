@@ -31,10 +31,27 @@ def build_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
 
+def _import_all_models() -> None:
+    """把 app 包里**所有**模型模块 import 一遍（表才会注册到 metadata）。
+
+    ⚠️ **为什么自动发现而不是写死列表**（实测 2026-11-25）：这个交付仓库是
+    **多单累积**的 ⇒ 每单分支带的模型模块**不一样**（订单 2968 有
+    `app/iam/models.py`，订单 2980 又有 `app/iam/roles/models.py`）⇒ ⇒
+    写死列表 ⇒ 换分支就漏表 ⇒ ⇒ **两个分支就得各维护一份 db.py** ⇒ ⇒
+    改成遍历 ⇒ 一份通用。
+    """
+    import pkgutil
+
+    import app
+
+    for m in pkgutil.walk_packages(app.__path__, prefix="app."):
+        if m.name.endswith(".models"):
+            importlib.import_module(m.name)
+
+
 def create_all(engine: Engine) -> None:
     # 确保业务模型已 import，表才注册到 metadata 里
-    importlib.import_module("app.iam.models")
-    importlib.import_module("app.iam.roles.models")
+    _import_all_models()
 
     Base.metadata.create_all(engine)
 
@@ -55,6 +72,7 @@ def create_all(engine: Engine) -> None:
 def require_migrated(engine: Engine) -> None:
     from sqlalchemy import inspect
 
+    _import_all_models()
     insp = inspect(engine)
     tables = set(insp.get_table_names())
     if "alembic_version" not in tables:

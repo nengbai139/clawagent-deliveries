@@ -37,6 +37,24 @@ def _run_alembic(db_path: Path, *args: str) -> None:
     assert r.returncode == 0, f"alembic {args} 失败:\n{r.stdout}\n{r.stderr}"
 
 
+def _first_revision() -> str:
+    """取迁移链上的第一条（基线）—— 不写死编号 ⇒ 换分支也能用。"""
+    env = dict(os.environ)
+    env["APP_DATABASE_URL"] = "sqlite+pysqlite:///:memory:"
+    r = subprocess.run(
+        [sys.executable, "-m", "alembic", "history", "--verbose"],
+        cwd=str(ROOT),
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, f"alembic history 失败:\n{r.stdout}\n{r.stderr}"
+    # 输出里每条迁移有 "Rev: <id>" ⇒ 取**最后一个**（基线在链的末尾输出）
+    revs = [line.split("Rev:")[1].strip() for line in r.stdout.splitlines() if "Rev:" in line]
+    assert revs, f"alembic history 没输出：\n{r.stdout}"
+    return revs[-1]
+
+
 def test_require_migrated_accepts_a_migrated_db(tmp_path):
     """迁移跑过的库 ⇒ 校验通过。"""
     db = tmp_path / "ok.db"
@@ -54,9 +72,15 @@ def test_require_migrated_rejects_an_empty_db(tmp_path):
 
 
 def test_require_migrated_rejects_a_partially_migrated_db(tmp_path):
-    """迁移只跑了一半 ⇒ 必须报错（不能放过缺表的库）。"""
+    """迁移只跑了一半 ⇒ 必须报错（不能放过缺表的库）。
+
+    ⚠️ **为什么按「第一条迁移」而不是写死 `0001_roles`**：这个仓库是多单累积的
+    ⇒ 每单分支的迁移编号不同 ⇒ 写死某个编号 ⇒ 换分支就找不到那条迁移 ⇒
+    ⇒ **自动取链条上的第一条**（`alembic history` 的第一条）。
+    """
     db = tmp_path / "partial.db"
-    _run_alembic(db, "upgrade", "0001_roles")
+    first = _first_revision()
+    _run_alembic(db, "upgrade", first)
     engine = create_engine(f"sqlite+pysqlite:///{db}")
     with pytest.raises(RuntimeError) as exc:
         require_migrated(engine)

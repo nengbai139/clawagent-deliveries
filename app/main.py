@@ -16,7 +16,7 @@ from app.api.iam.auth import login as login_routes
 from app.api.iam.auth import totp as totp_routes
 from app.api.iam.auth import qr as qr_routes
 from app.api.iam.me import identities as identity_routes
-from app.api.iam import roles as role_routes
+from app.api.iam import roles as role_routes  # 订单 2980：角色与权限矩阵
 from app.core.config import Settings
 from app.core.config import validate_settings
 from app.core.db import build_engine, build_session_factory, create_all, require_migrated
@@ -59,8 +59,7 @@ def create_app(
     #
     #	  - **生产**：表必须已经由 `alembic upgrade head` 建好 ⇒ 缺表就**报错
     #	    并说清怎么建**（fail-closed）⇒ 而不是悄悄建出一张和迁移不一致的表；
-    #	  - **非生产**：仍然 `create_all`（本地开发与单测要的是「一条命令就能跑」
-    #	    ⇒ 迁移链每次跑一遍太慢，也没必要）。
+    #	  - **非生产**：仍然 `create_all`（本地开发与单测要的是「一条命令就能跑」）。
     if settings.is_production:
         require_migrated(engine)
     else:
